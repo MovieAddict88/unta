@@ -623,12 +623,94 @@
         }
 
         @media (max-width: 480px) {
-  .content-card.grid {
-    aspect-ratio: auto;
-    height: auto;
-    min-height: 300px;
-  }
-}
+            .content-card.grid {
+                aspect-ratio: auto;
+                height: auto;
+                min-height: 300px;
+            }
+        }
+
+        /* Skeleton Loading Styles */
+        .skeleton {
+            position: relative;
+            overflow: hidden;
+            background-color: var(--dark-3);
+            border-radius: var(--radius);
+        }
+
+        .skeleton::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+            animation: skeleton-loading 1.5s infinite;
+        }
+
+        .skeleton-poster {
+            height: 85%;
+            background-color: var(--dark-2);
+            border-radius: var(--radius) var(--radius) 0 0;
+        }
+
+        .skeleton-content {
+            padding: 12px;
+            height: 15%;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .skeleton-title {
+            height: 16px;
+            background-color: var(--dark-2);
+            border-radius: 4px;
+            margin-bottom: 8px;
+        }
+
+        .skeleton-meta {
+            height: 12px;
+            background-color: var(--dark-2);
+            border-radius: 4px;
+            width: 60%;
+        }
+
+        @keyframes skeleton-loading {
+            0% {
+                left: -100%;
+            }
+            100% {
+                left: 100%;
+            }
+        }
+
+        .error-message {
+            text-align: center;
+            padding: 40px;
+            color: var(--light-2);
+        }
+
+        .error-message p {
+            margin-bottom: 20px;
+            font-size: 16px;
+        }
+
+        .retry-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-size: 14px;
+            transition: var(--transition);
+        }
+
+        .retry-btn:hover {
+            background: var(--primary-dark);
+        }
 
 
         .content-card.list {
@@ -4055,7 +4137,11 @@
             }
         };
 
-        // Configuration
+        // Configuration for pagination and lazy loading
+        const PAGINATION_LIMIT = 20;
+        const LAZY_LOAD_THRESHOLD = 200; // px from bottom to trigger load
+        const PRELOAD_BUFFER_PAGES = 2; // Load this many pages ahead
+
         const watchLaterDbUtil = {
             open: function() {
                 return new Promise((resolve, reject) => {
@@ -4172,6 +4258,17 @@
         let totalPages = 0;
         let isFetching = false;
         let isInitialLoad = true; // Flag for initial content shuffle
+        
+        // Pagination state
+        let paginationState = {
+            currentPage: 1,
+            totalPages: 0,
+            totalItems: 0,
+            currentType: 'all',
+            loadedPages: new Set(),
+            isLoading: false,
+            hasMorePages: true
+        };
         
         // DOM Elements
         const elements = {
@@ -4745,67 +4842,217 @@
             checkForUpdatesAndRefresh({ silent: true });
         }
 
-        // Load data from IndexedDB (Home/Movie/Series/Live tabs) and only refetch when the database changes
+        // Optimized loading with pagination - loads only essential data initially
         async function loadCineDataWithCache() {
-            const cached = await readCineDataFromIndexedDB();
-
-            if (cached && cached.data) {
-                cineData = cached.data;
-                cacheMeta = cached.meta || null;
-
-                let storedVersion = null;
-                try {
-                    storedVersion = localStorage.getItem(CACHE_VERSION_LS_KEY);
-                } catch (e) {
-                    storedVersion = null;
+            try {
+                // First load basic counts to show skeleton placeholders
+                const counts = await fetchContentCounts();
+                if (counts) {
+                    updatePaginationState(counts);
+                    showSkeletonPlaceholders(counts);
                 }
 
-                if ((!cacheMeta || !cacheMeta.version) && storedVersion) {
-                    cacheMeta = { version: String(storedVersion), cachedAt: cacheMeta && cacheMeta.cachedAt ? cacheMeta.cachedAt : Date.now() };
-                    try {
-                        const db = await dbUtil.open();
-                        await dbUtil.set(db, CACHE_META_KEY, cacheMeta);
-                        db.close();
-                    } catch (e) {
-                        // Best-effort only
-                    }
+                // Load first page quickly for immediate display
+                await loadPaginatedPage(1, 'all', false);
+                
+                console.log('✅ Initial paginated data loaded');
+                
+            } catch (err) {
+                console.error('❌ Failed to load initial data:', err);
+                showFatalDataLoadError(err);
+            }
+        }
+
+        // Fetch content counts for pagination info
+        async function fetchContentCounts() {
+            try {
+                const response = await fetch('api.php?action=get_content_count', { cache: 'no-store' });
+                if (!response.ok) return null;
+                return await response.json();
+            } catch (err) {
+                console.warn('Failed to fetch content counts:', err);
+                return null;
+            }
+        }
+
+        // Update pagination state based on counts
+        function updatePaginationState(counts) {
+            if (!counts) return;
+            
+            paginationState.totalItems = counts.content || 0;
+            paginationState.totalPages = Math.ceil(paginationState.totalItems / PAGINATION_LIMIT);
+        }
+
+        // Show skeleton placeholders while loading
+        function showSkeletonPlaceholders(counts) {
+            const contentGrid = elements.contentGrid;
+            if (!contentGrid) return;
+
+            const skeletonCount = Math.min(PAGINATION_LIMIT, counts.content || 20);
+            contentGrid.innerHTML = '';
+
+            for (let i = 0; i < skeletonCount; i++) {
+                const skeletonItem = document.createElement('div');
+                skeletonItem.className = 'content-card skeleton';
+                skeletonItem.innerHTML = `
+                    <div class="skeleton-poster"></div>
+                    <div class="skeleton-content">
+                        <div class="skeleton-title"></div>
+                        <div class="skeleton-meta"></div>
+                    </div>
+                `;
+                contentGrid.appendChild(skeletonItem);
+            }
+        }
+
+        // Load a specific page of content
+        async function loadPaginatedPage(page, type = 'all', append = true) {
+            if (paginationState.isLoading) return;
+            
+            paginationState.isLoading = true;
+            
+            try {
+                const params = new URLSearchParams({
+                    action: 'get_content_paginated',
+                    page: page,
+                    limit: PAGINATION_LIMIT
+                });
+                
+                if (type !== 'all') {
+                    params.append('type', type);
                 }
 
-                console.log('✅ Loaded content from IndexedDB cache');
+                const response = await fetch(`api.php?${params}`, { cache: 'no-store' });
+                if (!response.ok) throw new Error(`API request failed: ${response.status}`);
+                
+                const data = await response.json();
+                if (data.error) throw new Error(data.error);
 
-                if (cached.tabCache) {
-                    tabContentCache = withAllTabCache(cached.tabCache);
+                // Update pagination info
+                if (data.pagination) {
+                    paginationState.totalPages = data.pagination.total_pages;
+                    paginationState.totalItems = data.pagination.total;
+                    paginationState.hasMorePages = data.pagination.has_next;
+                }
+
+                // Cache the loaded data
+                await cachePaginatedData(page, data);
+
+                // Render the content
+                if (append) {
+                    appendPaginatedContent(data);
                 } else {
-                    tabContentCache = withAllTabCache(buildTabContentCacheFromCineData(cineData));
-                    try {
-                        const db = await dbUtil.open();
-                        await dbUtil.set(db, TAB_CACHE_KEY, {
-                            movies: tabContentCache.movies,
-                            series: tabContentCache.series,
-                            live: tabContentCache.live
-                        });
-                        db.close();
-                    } catch (err) {
-                        // Best-effort; ignore IndexedDB write failures
+                    replaceContent(data);
+                }
+
+                paginationState.loadedPages.add(page);
+                paginationState.currentPage = page;
+                paginationState.currentType = type;
+
+            } catch (err) {
+                console.error(`❌ Failed to load page ${page}:`, err);
+                if (!append) {
+                    showErrorMessage('Failed to load content. Please try again.');
+                }
+            } finally {
+                paginationState.isLoading = false;
+            }
+        }
+
+        // Cache paginated data in IndexedDB
+        async function cachePaginatedData(page, data) {
+            try {
+                const db = await dbUtil.open();
+                const cacheKey = `page_${page}_${paginationState.currentType}`;
+                await dbUtil.set(db, cacheKey, {
+                    data,
+                    timestamp: Date.now(),
+                    page,
+                    type: paginationState.currentType
+                });
+                db.close();
+            } catch (err) {
+                console.warn('Failed to cache paginated data:', err);
+            }
+        }
+
+        // Append new content to existing grid
+        function appendPaginatedContent(data) {
+            if (!data || !data.Categories) return;
+
+            const contentGrid = elements.contentGrid;
+            if (!contentGrid) return;
+
+            // Remove skeleton placeholders
+            const skeletons = contentGrid.querySelectorAll('.skeleton');
+            skeletons.forEach(skeleton => skeleton.remove());
+
+            data.Categories.forEach(category => {
+                category.Entries.forEach(entry => {
+                    const contentCard = createContentCard({ ...entry, type: getTypeFromCategory(category.MainCategory) });
+                    contentGrid.appendChild(contentCard);
+                });
+            });
+        }
+
+        // Replace content with new data
+        function replaceContent(data) {
+            if (!data || !data.Categories) return;
+
+            const contentGrid = elements.contentGrid;
+            if (!contentGrid) return;
+
+            // Clear existing content and skeletons
+            contentGrid.innerHTML = '';
+
+            data.Categories.forEach(category => {
+                category.Entries.forEach(entry => {
+                    const contentCard = createContentCard({ ...entry, type: getTypeFromCategory(category.MainCategory) });
+                    contentGrid.appendChild(contentCard);
+                });
+            });
+        }
+
+        // Helper function to determine type from category name
+        function getTypeFromCategory(categoryName) {
+            if (!categoryName) return 'movie';
+            const name = categoryName.toLowerCase();
+            if (name.includes('series')) return 'series';
+            if (name.includes('live')) return 'live';
+            return 'movie';
+        }
+
+        // Load more content (for lazy loading)
+        async function loadMoreContent() {
+            if (!paginationState.hasMorePages || paginationState.isLoading) return;
+
+            const nextPage = paginationState.currentPage + 1;
+            await loadPaginatedPage(nextPage, paginationState.currentType, true);
+        }
+
+        // Setup lazy loading observer
+        function setupLazyLoading() {
+            const sentinel = document.createElement('div');
+            sentinel.id = 'lazy-load-sentinel';
+            sentinel.style.height = '1px';
+            sentinel.style.width = '100%';
+            
+            const contentContainer = document.querySelector('.content-container') || elements.contentGrid?.parentElement;
+            if (contentContainer) {
+                contentContainer.appendChild(sentinel);
+            }
+
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        loadMoreContent();
                     }
-                }
-            }
+                });
+            }, {
+                rootMargin: `${LAZY_LOAD_THRESHOLD}px`
+            });
 
-            if (!cineData) {
-                try {
-                    const [serverVersion, data] = await Promise.all([
-                        fetchServerContentVersion(),
-                        fetchAllContentFromServer({ showSpinner: true })
-                    ]);
-
-                    cineData = data;
-                    console.log('✅ Loaded content from server API');
-                    tabContentCache = withAllTabCache(buildTabContentCacheFromCineData(cineData));
-                    await writeCineDataToIndexedDB({ data: cineData, version: serverVersion, tabCache: tabContentCache });
-                } catch (err) {
-                    showFatalDataLoadError(err);
-                }
-            }
+            observer.observe(sentinel);
         }
         
         // TMDB API function removed - using local data only
@@ -4820,110 +5067,157 @@
             return shuffled.slice(0, Math.min(count, arr.length));
         }
         
-        // Render carousel
+        // Optimized carousel rendering - loads minimal data needed
         function renderCarousel() {
-            if (!cineData || !cineData.Categories || cineData.Categories.length < 3) {
-                console.warn("Carousel data is not as expected. Skipping render.");
-                return;
-            }
+            // For carousel, we only need a few items from each category
+            // Load these efficiently without loading all content
+            loadCarouselData().then(carouselData => {
+                if (!carouselData || carouselData.length === 0) {
+                    console.warn("Carousel data is not available. Skipping render.");
+                    return;
+                }
 
-            const featuredContent = [];
-            const moviesCategory = cineData.Categories.find(cat => cat.MainCategory.toLowerCase().includes('movie'));
-            const seriesCategory = cineData.Categories.find(cat => cat.MainCategory.toLowerCase().includes('series'));
-            const liveCategory = cineData.Categories.find(cat => cat.MainCategory.toLowerCase().includes('live'));
+                // Render carousel items
+                elements.carouselInner.innerHTML = '';
+                elements.carouselIndicators.innerHTML = '';
 
-            // Add randomly selected movies
-            if (moviesCategory && moviesCategory.Entries) {
-                getRandomItems(moviesCategory.Entries, 3).forEach(movie => {
-                    featuredContent.push({
-                        type: 'movie',
-                        title: movie.Title,
-                        description: movie.Description,
-                        image: movie.Poster,
-                        // Store original item for click handling
-                        originalItem: movie 
-                    });
-                });
-            }
+                carouselData.forEach((item, index) => {
+                    // Carousel item
+                    const carouselItem = document.createElement('div');
+                    carouselItem.className = 'carousel-item';
+                    const year = item.originalItem && item.originalItem.Year ? item.originalItem.Year : '';
+                    const ratingHtml = item.originalItem ? generateStarRating(item.originalItem.Rating) : '';
 
-            // Add randomly selected TV series
-            if (seriesCategory && seriesCategory.Entries) {
-                getRandomItems(seriesCategory.Entries, 1).forEach(series => {
-                    featuredContent.push({
-                        type: 'series',
-                        title: series.Title,
-                        description: series.Description || `Popular ${series.SubCategory} series`,
-                        image: series.Poster,
-                        originalItem: series 
-                    });
-                });
-            }
-
-            // Add randomly selected live TV
-            if (liveCategory && liveCategory.Entries) {
-                getRandomItems(liveCategory.Entries, 1).forEach(live => {
-                    featuredContent.push({
-                        type: 'live',
-                        title: live.Title,
-                        description: live.Description,
-                        image: live.Poster,
-                        originalItem: live 
-                    });
-                });
-            }
-
-            // Shuffle the order of the collected featured content
-            shuffleArray(featuredContent);
-
-            // Render carousel items
-            elements.carouselInner.innerHTML = '';
-            elements.carouselIndicators.innerHTML = '';
-
-            featuredContent.forEach((item, index) => {
-                // Carousel item
-                const carouselItem = document.createElement('div');
-                carouselItem.className = 'carousel-item';
-                // Get year from the original item if available
-                const year = item.originalItem && item.originalItem.Year ? item.originalItem.Year : '';
-                const ratingHtml = item.originalItem ? generateStarRating(item.originalItem.Rating) : '';
-
-                carouselItem.innerHTML = `
-                    <img src="${item.image}" alt="${item.title}" onerror="this.onerror=null; this.src='${PLACEHOLDER_IMAGE_URL}';">
-                    <div class="carousel-content">
-                        <h2>${item.title}</h2>
-                        <div class="carousel-meta">
-                            ${ratingHtml}
-                            ${year ? `<span class="carousel-year">${year}</span>` : ''}
+                    carouselItem.innerHTML = `
+                        <img src="${item.image}" alt="${item.title}" onerror="this.onerror=null; this.src='${PLACEHOLDER_IMAGE_URL}';">
+                        <div class="carousel-content">
+                            <h2>${item.title}</h2>
+                            <div class="carousel-meta">
+                                ${ratingHtml}
+                                ${year ? `<span class="carousel-year">${year}</span>` : ''}
+                            </div>
+                            <p>${item.description}</p>
                         </div>
-                        <p>${item.description}</p>
-                    </div>
-                `;
-                elements.carouselInner.appendChild(carouselItem);
+                    `;
+                    elements.carouselInner.appendChild(carouselItem);
 
-                // Indicator
-                const indicator = document.createElement('div');
-                indicator.className = 'indicator';
-                indicator.dataset.index = index;
-                if (index === 0) indicator.classList.add('active');
-                elements.carouselIndicators.appendChild(indicator);
+                    // Indicator
+                    const indicator = document.createElement('div');
+                    indicator.className = 'indicator';
+                    indicator.dataset.index = index;
+                    if (index === 0) indicator.classList.add('active');
+                    elements.carouselIndicators.appendChild(indicator);
 
-                // Add click event to indicator
-                indicator.addEventListener('click', () => {
-                    currentCarouselIndex = index;
-                    updateCarousel();
+                    // Add click event to indicator
+                    indicator.addEventListener('click', () => {
+                        currentCarouselIndex = index;
+                        updateCarousel();
+                    });
+
+                    // Make carousel item clickable
+                    carouselItem.addEventListener('click', () => {
+                        if (item.originalItem) {
+                            openViewer({ ...item.originalItem, type: item.type });
+                        } else {
+                            console.error("Carousel item is missing originalItem data:", item);
+                        }
+                    });
+                });
+            }).catch(err => {
+                console.warn("Failed to load carousel data:", err);
+            });
+        }
+
+        // Load minimal data needed for carousel
+        async function loadCarouselData() {
+            try {
+                // For carousel, we just need a few items from each category
+                // Load first page of each category to get featured content
+                const featuredContent = [];
+                
+                // Load movies, series, and live content in parallel
+                const [moviesData, seriesData, liveData] = await Promise.all([
+                    fetchCarouselCategoryData('movie'),
+                    fetchCarouselCategoryData('series'),
+                    fetchCarouselCategoryData('live')
+                ]);
+
+                // Add randomly selected movies
+                if (moviesData && moviesData.length > 0) {
+                    getRandomItems(moviesData, 3).forEach(movie => {
+                        featuredContent.push({
+                            type: 'movie',
+                            title: movie.Title,
+                            description: movie.Description,
+                            image: movie.Poster,
+                            originalItem: movie 
+                        });
+                    });
+                }
+
+                // Add randomly selected TV series
+                if (seriesData && seriesData.length > 0) {
+                    getRandomItems(seriesData, 1).forEach(series => {
+                        featuredContent.push({
+                            type: 'series',
+                            title: series.Title,
+                            description: series.Description || `Popular series`,
+                            image: series.Poster,
+                            originalItem: series 
+                        });
+                    });
+                }
+
+                // Add randomly selected live TV
+                if (liveData && liveData.length > 0) {
+                    getRandomItems(liveData, 1).forEach(live => {
+                        featuredContent.push({
+                            type: 'live',
+                            title: live.Title,
+                            description: live.Description,
+                            image: live.Poster,
+                            originalItem: live 
+                        });
+                    });
+                }
+
+                // Shuffle the order of the collected featured content
+                return shuffleArray(featuredContent);
+            } catch (err) {
+                console.error("Failed to load carousel data:", err);
+                return [];
+            }
+        }
+
+        // Fetch minimal data for carousel from specific category
+        async function fetchCarouselCategoryData(type) {
+            try {
+                const params = new URLSearchParams({
+                    action: 'get_content_paginated',
+                    page: 1,
+                    limit: 20, // Small limit for carousel
+                    type: type
                 });
 
-                // Make carousel item clickable
-                carouselItem.addEventListener('click', () => {
-                    if (item.originalItem) {
-                        // The 'type' is already correctly set in featuredContent items
-                        openViewer({ ...item.originalItem, type: item.type });
-                    } else {
-                        // Fallback or error if originalItem is somehow missing
-                        console.error("Carousel item is missing originalItem data:", item);
+                const response = await fetch(`api.php?${params}`, { cache: 'no-store' });
+                if (!response.ok) return [];
+
+                const data = await response.json();
+                if (data.error || !data.Categories) return [];
+
+                // Extract entries from the category
+                const entries = [];
+                data.Categories.forEach(category => {
+                    if (category.Entries) {
+                        entries.push(...category.Entries);
                     }
                 });
-            });
+
+                return entries;
+            } catch (err) {
+                console.warn(`Failed to load ${type} data for carousel:`, err);
+                return [];
+            }
         }
         
         // Render content filters
@@ -4990,15 +5284,15 @@
             });
         }
         
-        // Render content based on filters
+        // Render content based on filters - now with pagination support
         async function renderContent(category = 'all') {
-            if (!cineData || !cineData.Categories) return;
+            // Reset pagination state
+            paginationState.loadedPages.clear();
+            paginationState.currentPage = 1;
+            paginationState.currentType = category;
+            paginationState.hasMorePages = true;
 
             const filtersSection = document.querySelector('.filters-section');
-
-            // Reset pagination
-            currentPage = 1;
-            currentContent = [];
 
             if (category === 'watch-later') {
                 filtersSection.style.display = 'none'; // Hide filters for Watch Later
@@ -5007,12 +5301,15 @@
                 db.close();
                 currentContent = watchLaterItems.map(item => ({ ...item, type: item.type || 'movie' }));
 
-                totalPages = Math.ceil(currentContent.length / ITEMS_PER_PAGE);
-                cachedContent = [...currentContent];
-                currentView = 'watch-later'; // Set the view
-                renderCurrentView();
-                renderPaginationControls();
-                setupLazyLoading();
+                // Show watch later content directly (no pagination needed)
+                const contentGrid = elements.contentGrid;
+                if (contentGrid) {
+                    contentGrid.innerHTML = '';
+                    currentContent.forEach(item => {
+                        const contentCard = createContentCard(item);
+                        contentGrid.appendChild(contentCard);
+                    });
+                }
                 return;
             } else {
                 const icon = elements.viewToggleBtn.querySelector('i');
@@ -5024,77 +5321,21 @@
                 filtersSection.style.display = 'block'; // Show filters for other categories
             }
 
-            // Get selected category
-            const genre = elements.genreFilter.value.toLowerCase();
-            const country = elements.countryFilter.value.toLowerCase();
-            const year = elements.yearFilter.value;
-            const sortBy = elements.sortFilter.value;
+            // Load content for the selected category using pagination
+            await loadPaginatedPage(1, category, false);
+        }
 
-            // Filter content
-            const sourceList = (() => {
-                if (!tabContentCache) return null;
-                if (category === 'movies') return tabContentCache.movies;
-                if (category === 'series') return tabContentCache.series;
-                if (category === 'live') return tabContentCache.live;
-                return tabContentCache.all;
-            })();
-
-            if (sourceList) {
-                sourceList.forEach(entry => {
-                    const genreMatch = genre === 'all' ||
-                        (entry.SubCategory && entry.SubCategory.toLowerCase().includes(genre));
-                    const countryMatch = country === 'all' ||
-                        (entry.Country && entry.Country.toLowerCase().includes(country));
-                    const yearMatch = year === 'all' || (entry.Year && entry.Year.toString() === year);
-
-                    if (genreMatch && countryMatch && yearMatch && isContentAllowed(entry)) {
-                        currentContent.push(entry);
-                    }
-                });
-            } else {
-                cineData.Categories.forEach(cat => {
-                    if (category === 'all' || cat.MainCategory.toLowerCase().includes(category)) {
-                        cat.Entries.forEach(entry => {
-                            const genreMatch = genre === 'all' ||
-                                (entry.SubCategory && entry.SubCategory.toLowerCase().includes(genre));
-                            const countryMatch = country === 'all' ||
-                                (entry.Country && entry.Country.toLowerCase().includes(country));
-                            const yearMatch = year === 'all' || (entry.Year && entry.Year.toString() === year);
-
-                            if (genreMatch && countryMatch && yearMatch && isContentAllowed(entry)) {
-                                currentContent.push({
-                                    ...entry,
-                                    type: cat.MainCategory.toLowerCase().includes('movie') ? 'movie' :
-                                        cat.MainCategory.toLowerCase().includes('series') ? 'series' : 'live'
-                                });
-                            }
-                        });
-                    }
-                });
+        // Show error message to user
+        function showErrorMessage(message) {
+            const contentGrid = elements.contentGrid;
+            if (contentGrid) {
+                contentGrid.innerHTML = `
+                    <div class="error-message">
+                        <p>${message}</p>
+                        <button onclick="location.reload()" class="retry-btn">Retry</button>
+                    </div>
+                `;
             }
-
-            // Shuffle content on initial load
-            if (isInitialLoad) {
-                currentContent = shuffleArray(currentContent);
-                isInitialLoad = false;
-            }
-            // Apply sorting if not initial load
-            else {
-                currentContent = sortContent(currentContent, sortBy);
-            }
-
-            // Calculate total pages
-            totalPages = Math.ceil(currentContent.length / ITEMS_PER_PAGE);
-
-            // Cache filtered content
-            cachedContent = [...currentContent];
-
-            // Render content
-            renderCurrentView();
-            renderPaginationControls();
-
-            // Re-initialize lazy loading for the new content
-            setupLazyLoading();
         }
 
         // Render the current view (grid or list)
