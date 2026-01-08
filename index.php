@@ -3732,6 +3732,10 @@
                                             </label>
                                         </div>
                                     </div>
+                                    <button class="action-btn" id="watch-later-btn">
+                                        <i class="fas fa-clock"></i>
+                                        <span>Watch Later</span>
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -5566,7 +5570,7 @@
 
             const watchLaterBtn = document.getElementById('watch-later-btn');
             if (watchLaterBtn) {
-                const newToggleHandler = () => toggleWatchLater(content);
+                const newToggleHandler = () => toggleWatchLater(content, watchLaterBtn);
                 if (watchLaterBtn._toggleHandler) {
                     watchLaterBtn.removeEventListener('click', watchLaterBtn._toggleHandler);
                 }
