@@ -2217,13 +2217,17 @@
         /* Loading Spinner */
         .loading-spinner {
             display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
             width: 50px;
             height: 50px;
             border: 5px solid rgba(255,255,255,0.3);
             border-radius: 50%;
             border-top-color: var(--youtube-red);
             animation: spin 1s ease-in-out infinite;
-            margin: 30px auto;
+            z-index: 9999;
         }
 
         /* Progress Bar */
@@ -8427,6 +8431,7 @@ async function switchToServer(server, allServers) {
             const loadMoreBtn = document.getElementById('load-more-btn');
             if (loadMoreBtn) {
                 loadMoreBtn.addEventListener('click', () => {
+                    if (isFetching) return;
                     fetchAllContentFromServer(currentPage + 1, true);
                 });
             }
@@ -8821,121 +8826,6 @@ async function switchToServer(server, allServers) {
                     indicator.classList.remove('active');
                 }
             });
-        }
-
-        function appendContentToGrid(entries) {
-            entries.forEach(item => {
-                const card = createContentCard(item);
-                if (card) elements.contentGrid.appendChild(card);
-                const listItem = createContentListItem(item);
-                if (listItem) elements.contentList.appendChild(listItem);
-            });
-            setupLazyLoading();
-        }
-
-        async function init() {
-            try {
-                const db = await dbUtil.open();
-                const cachedData = await dbUtil.get(db, PLAYLIST_KEY);
-                db.close();
-
-                if (cachedData && cachedData.Categories && cachedData.Categories.length > 0) {
-                    console.log("Loading content from cache.");
-                    cineData = cachedData;
-
-                    processAndDisplayContent(cachedData);
-
-                    if (cachedData.pagination) {
-                        currentPage = cachedData.pagination.currentPage;
-                        totalPages = cachedData.pagination.totalPages;
-                        if (currentPage < totalPages) {
-                            elements.loadMoreContainer.style.display = 'block';
-                        } else {
-                            elements.loadMoreContainer.style.display = 'none';
-                        }
-                    }
-                } else {
-                    console.log("Cache is empty. Fetching from server.");
-                    await fetchAllContentFromServer(1);
-                }
-            } catch (error) {
-                console.error("Initialization failed:", error);
-                await fetchAllContentFromServer(1);
-            }
-        }
-
-        async function fetchAllContentFromServer(page = 1, isLoadMore = false) {
-            if (isFetching) return;
-            isFetching = true;
-            elements.loadingSpinner.style.display = 'block';
-
-            try {
-                const response = await fetch(`api.php?action=get_all_content&page=${page}&limit=${CONTENT_PER_PAGE}`);
-                if (!response.ok) {
-                    throw new Error(`Network response was not ok: ${response.statusText}`);
-                }
-                const data = await response.json();
-
-                if (data.error) {
-                    throw new Error(data.error);
-                }
-
-                const newEntries = [];
-                if (data.Categories) {
-                    data.Categories.forEach(category => {
-                        const type = category.MainCategory.toLowerCase().includes('movie') ? 'movie' :
-                                     category.MainCategory.toLowerCase().includes('series') ? 'series' : 'live';
-                        if(category.Entries) {
-                            category.Entries.forEach(entry => {
-                                newEntries.push({ ...entry, type });
-                            });
-                        }
-                    });
-                }
-
-                if (!isLoadMore) {
-                    cineData = data;
-                    processAndDisplayContent(data);
-                } else {
-                    if (data.Categories) {
-                        data.Categories.forEach(newCategory => {
-                            const existingCategory = cineData.Categories.find(c => c.MainCategory === newCategory.MainCategory);
-                            if (existingCategory) {
-                                if(newCategory.Entries) {
-                                    existingCategory.Entries.push(...newCategory.Entries);
-                                }
-                            } else {
-                                cineData.Categories.push(newCategory);
-                            }
-                        });
-                    }
-                    cineData.pagination = data.pagination;
-
-                    cachedContent.push(...newEntries);
-                    appendContentToGrid(newEntries);
-                }
-
-                currentPage = data.pagination.currentPage;
-                totalPages = data.pagination.totalPages;
-
-                if (currentPage < totalPages) {
-                    elements.loadMoreContainer.style.display = 'block';
-                } else {
-                    elements.loadMoreContainer.style.display = 'none';
-                }
-
-                const db = await dbUtil.open();
-                await dbUtil.set(db, PLAYLIST_KEY, cineData);
-                db.close();
-                console.log(`Page ${page} loaded and cached.`);
-
-            } catch (error) {
-                console.error('Failed to fetch content:', error);
-                elements.contentGrid.innerHTML = '<p>Error loading content. Please try again later.</p>';
-            } finally {
-                isFetching = false;
-                elements.loadingSpinner.style.display = 'none';
-            }
         }
         // --- Parental Control Logic ---
 
