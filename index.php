@@ -69,6 +69,28 @@
            }
        }
 
+       @keyframes slideInRight {
+           from {
+               transform: translateX(100%);
+               opacity: 0;
+           }
+           to {
+               transform: translateX(0);
+               opacity: 1;
+           }
+       }
+
+       @keyframes slideOutRight {
+           from {
+               transform: translateX(0);
+               opacity: 1;
+           }
+           to {
+               transform: translateX(100%);
+               opacity: 0;
+           }
+       }
+
        .splash-screen.hidden {
            display: none;
        }
@@ -4157,8 +4179,9 @@
         };
 
         const ITEMS_PER_PAGE = 20;
-        const LAZY_LOAD_THRESHOLD = 100; // px from bottom to trigger load
+        const LAZY_LOAD_THRESHOLD = 500; // px from bottom to trigger load
         const PLACEHOLDER_IMAGE_URL = 'https://movie-fcs.fwh.is/cinecraze/cinecraze.png';
+        const USE_PAGINATION_API = true; // Toggle to enable paginated API
         // TMDB API removed - using local data only
         
         // SAMPLE DATA - Replace this with your actual data source
@@ -4172,6 +4195,7 @@
         let totalPages = 0;
         let isFetching = false;
         let isInitialLoad = true; // Flag for initial content shuffle
+        let hasMoreContent = true; // Track if there's more content to load
         
         // DOM Elements
         const elements = {
@@ -4990,6 +5014,155 @@
             });
         }
         
+        // Load more content (infinite scroll)
+        async function loadMoreContent() {
+            if (isFetching || !hasMoreContent) return;
+            
+            isFetching = true;
+            const loadingIndicator = showLoadingIndicator();
+            const startTime = performance.now();
+            
+            try {
+                currentPage++;
+                const activeNavItem = document.querySelector('.nav-item.active');
+                const category = activeNavItem ? activeNavItem.dataset.category : 'all';
+                
+                console.log(`📄 Loading page ${currentPage} for category: ${category}`);
+                
+                // Fetch next page from API
+                const response = await fetch(`api.php?action=get_paginated_content&page=${currentPage}&limit=${ITEMS_PER_PAGE}&category=${category}`);
+                const data = await response.json();
+                
+                const loadTime = (performance.now() - startTime).toFixed(2);
+                console.log(`✅ Page ${currentPage} loaded in ${loadTime}ms (${data.entries?.length || 0} items)`);
+                
+                if (data.entries && data.entries.length > 0) {
+                    // Append new content to current content
+                    data.entries.forEach(entry => {
+                        currentContent.push(entry);
+                        cachedContent.push(entry);
+                    });
+                    
+                    // Update hasMoreContent flag
+                    hasMoreContent = data.pagination.hasMore;
+                    totalPages = data.pagination.totalPages;
+                    
+                    // Render only the new items
+                    renderNewItems(data.entries);
+                    
+                    // Re-initialize lazy loading for new images
+                    setupLazyLoading();
+                } else {
+                    hasMoreContent = false;
+                    showEndOfContentMessage();
+                }
+            } catch (error) {
+                console.error('Error loading more content:', error);
+                showNotification('Failed to load more content. Please try again.', 'error');
+            } finally {
+                isFetching = false;
+                removeLoadingIndicator(loadingIndicator);
+            }
+        }
+        
+        // Show end of content message
+        function showEndOfContentMessage() {
+            // Check if message already exists
+            if (document.getElementById('end-of-content-message')) return;
+            
+            const message = document.createElement('div');
+            message.id = 'end-of-content-message';
+            message.style.cssText = `
+                padding: 30px;
+                text-align: center;
+                color: var(--gray);
+                font-size: 14px;
+                margin: 20px 0;
+                opacity: 0.7;
+            `;
+            message.innerHTML = `
+                <i class="fas fa-check-circle" style="font-size: 20px; margin-bottom: 10px; color: var(--netflix-red);"></i>
+                <p style="margin: 0;">You've reached the end of the content</p>
+            `;
+            document.querySelector('.content-container').appendChild(message);
+        }
+        
+        // Show loading indicator at bottom of page
+        function showLoadingIndicator() {
+            const indicator = document.createElement('div');
+            indicator.id = 'loading-more-indicator';
+            indicator.style.cssText = `
+                padding: 30px;
+                text-align: center;
+                color: var(--gray);
+                font-size: 16px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 12px;
+                background: linear-gradient(180deg, transparent 0%, rgba(20, 20, 20, 0.5) 50%, transparent 100%);
+                margin: 20px 0;
+                border-radius: 8px;
+            `;
+            indicator.innerHTML = `
+                <i class="fas fa-spinner fa-spin" style="font-size: 24px; color: var(--netflix-red);"></i>
+                <span style="font-weight: 500;">Loading more content...</span>
+            `;
+            document.querySelector('.content-container').appendChild(indicator);
+            return indicator;
+        }
+        
+        // Remove loading indicator
+        function removeLoadingIndicator(indicator) {
+            if (indicator && indicator.parentNode) {
+                indicator.parentNode.removeChild(indicator);
+            }
+        }
+        
+        // Render new items without clearing existing ones
+        function renderNewItems(items) {
+            let container;
+            let viewClass = 'grid';
+            
+            if (currentView === 'watch-later') {
+                container = elements.watchLaterGrid;
+            } else if (currentView === 'grid') {
+                container = elements.contentGrid;
+            } else { // list
+                container = elements.contentList;
+                viewClass = 'list';
+            }
+            
+            items.forEach(item => {
+                const card = createContentCard(item, viewClass);
+                container.appendChild(card);
+            });
+        }
+        
+        // Show notification
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 80px;
+                right: 20px;
+                background: ${type === 'error' ? 'rgba(229, 9, 20, 0.9)' : 'rgba(59, 130, 246, 0.9)'};
+                color: white;
+                padding: 15px 20px;
+                border-radius: 8px;
+                z-index: 10000;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+                animation: slideInRight 0.3s ease;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.style.animation = 'slideOutRight 0.3s ease';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
         // Render content based on filters
         async function renderContent(category = 'all') {
             if (!cineData || !cineData.Categories) return;
@@ -4999,6 +5172,7 @@
             // Reset pagination
             currentPage = 1;
             currentContent = [];
+            hasMoreContent = true;
 
             if (category === 'watch-later') {
                 filtersSection.style.display = 'none'; // Hide filters for Watch Later
@@ -5022,6 +5196,44 @@
                     currentView = 'grid';
                 }
                 filtersSection.style.display = 'block'; // Show filters for other categories
+            }
+
+            // Use paginated API if enabled
+            if (USE_PAGINATION_API) {
+                try {
+                    // Clean up old messages
+                    const oldEndMessage = document.getElementById('end-of-content-message');
+                    if (oldEndMessage) oldEndMessage.remove();
+                    
+                    // Show loading state
+                    const container = currentView === 'grid' ? elements.contentGrid : elements.contentList;
+                    container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--gray);"><i class="fas fa-spinner fa-spin fa-3x"></i><p style="margin-top: 20px;">Loading content...</p></div>';
+                    
+                    // Fetch first page from API
+                    const response = await fetch(`api.php?action=get_paginated_content&page=1&limit=${ITEMS_PER_PAGE}&category=${category}`);
+                    const data = await response.json();
+                    
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    
+                    currentContent = data.entries || [];
+                    cachedContent = [...currentContent];
+                    hasMoreContent = data.pagination.hasMore;
+                    totalPages = data.pagination.totalPages;
+                    
+                    // Render content
+                    renderCurrentView();
+                    
+                    // Re-initialize lazy loading for the new content
+                    setupLazyLoading();
+                    
+                    return;
+                } catch (error) {
+                    console.error('Error fetching paginated content:', error);
+                    showNotification('Failed to load content. Falling back to cached data.', 'error');
+                    // Fall back to loading from cache
+                }
             }
 
             // Get selected category
@@ -5120,9 +5332,11 @@
 
             container.innerHTML = '';
 
-            const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-            const endIndex = startIndex + ITEMS_PER_PAGE;
-            const itemsToRender = currentContent.slice(startIndex, endIndex);
+            // When using pagination API, render all loaded content
+            // Otherwise, use pagination to slice content
+            const itemsToRender = USE_PAGINATION_API 
+                ? currentContent 
+                : currentContent.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
             itemsToRender.forEach(item => {
                 const card = createContentCard(item, viewClass);
@@ -8560,18 +8774,29 @@ async function switchToServer(server, allServers) {
                 elements.nextEpisodeBtn.addEventListener('click', handleNextEpisode);
             }
 
-            // Infinite scroll
+            // Infinite scroll with optimized throttling
+            let scrollTimeout;
             window.addEventListener('scroll', () => {
-                if (isFetching) return;
-
-                const scrollPosition = window.innerHeight + window.scrollY;
-                const documentHeight = document.documentElement.scrollHeight;
-
-                if (scrollPosition >= documentHeight - LAZY_LOAD_THRESHOLD) {
-                    if (currentPage < totalPages) {
-                        loadMoreContent();
-                    }
+                if (scrollTimeout) {
+                    clearTimeout(scrollTimeout);
                 }
+                
+                scrollTimeout = setTimeout(() => {
+                    if (isFetching) return;
+
+                    const scrollPosition = window.innerHeight + window.scrollY;
+                    const documentHeight = document.documentElement.scrollHeight;
+
+                    if (scrollPosition >= documentHeight - LAZY_LOAD_THRESHOLD) {
+                        if (hasMoreContent && USE_PAGINATION_API) {
+                            loadMoreContent();
+                        } else if (currentPage < totalPages && !USE_PAGINATION_API) {
+                            currentPage++;
+                            renderCurrentView();
+                            renderPaginationControls();
+                        }
+                    }
+                }, 100); // Throttle scroll events
             });
 
             // Hamburger menu toggle
