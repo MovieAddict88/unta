@@ -3662,6 +3662,11 @@
                 <div class="progress-bar" id="progress-bar"></div>
             </div>
 
+            <!-- Load More Button -->
+            <div class="load-more-container" id="load-more-container" style="display: none;">
+                <button class="load-more-btn" id="load-more-btn">Load More</button>
+            </div>
+
             <!-- Pagination -->
             <div class="pagination-container" id="pagination-container">
                 <!-- Pagination buttons will be dynamically added here -->
@@ -3975,6 +3980,9 @@
         const ACTIVE_CATEGORY_KEY = 'activeCategory';
         const CACHE_VERSION_LS_KEY = 'conecrazeContentVersion';
         const UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+        const CONTENT_PER_PAGE = 20;
+        let currentPage = 1;
+        let totalPages = 1;
 
         const dbUtil = {
             open: function() {
@@ -4621,26 +4629,78 @@
         }
 
         // Fetch the full dataset from PHP API (used only when cache is missing/outdated)
-        async function fetchAllContentFromServer({ showSpinner = true } = {}) {
-            if (showSpinner) {
-                elements.loadingSpinner.style.display = 'block';
-            }
+        async function fetchAllContentFromServer(page = 1, append = false) {
+            elements.loadingSpinner.style.display = 'block';
+            const loadMoreContainer = document.getElementById('load-more-container');
+            isFetching = true;
 
             try {
-                const response = await fetch('api.php?action=get_all_content', { cache: 'no-store' });
-                if (!response.ok) {
-                    throw new Error(`API request failed with status ${response.status}`);
-                }
+                const response = await fetch(`api.php?action=get_all_content&page=${page}&limit=${CONTENT_PER_PAGE}`);
                 const data = await response.json();
-                if (data.error) {
-                    throw new Error(data.error);
+
+                const newContentFlat = flattenCineData(data.data);
+
+                if (append) {
+                    cachedContent.push(...newContentFlat);
+                    appendContentToGrid(newContentFlat, 'all');
+
+                    if (cineData && cineData.Categories && data.data && data.data.Categories) {
+                        data.data.Categories.forEach(newCategory => {
+                            const existingCategory = cineData.Categories.find(
+                                oldCategory => oldCategory.MainCategory === newCategory.MainCategory
+                            );
+                            if (existingCategory) {
+                                const existingTitles = new Set(existingCategory.Entries.map(e => e.Title));
+                                const newEntries = newCategory.Entries.filter(e => !existingTitles.has(e.Title));
+                                existingCategory.Entries.push(...newEntries);
+                            } else {
+                                cineData.Categories.push(newCategory);
+                            }
+                        });
+                    }
+                } else {
+                    cineData = data.data;
+                    cachedContent = newContentFlat;
+                    await renderContent('all');
+                    updateCarouselWithData(cachedContent);
                 }
-                return data;
+
+                currentPage = data.pagination.currentPage;
+                totalPages = data.pagination.totalPages;
+
+                if (currentPage < totalPages) {
+                    loadMoreContainer.style.display = 'flex';
+                } else {
+                    loadMoreContainer.style.display = 'none';
+                }
+
+                const db = await dbUtil.open();
+                await dbUtil.set(db, PLAYLIST_KEY, cineData);
+                db.close();
+
+            } catch (error) {
+                console.error('Error fetching content:', error);
             } finally {
-                if (showSpinner) {
-                    elements.loadingSpinner.style.display = 'none';
-                }
+                elements.loadingSpinner.style.display = 'none';
+                isFetching = false;
             }
+        }
+
+        function appendContentToGrid(items, category) {
+            const fragment = document.createDocumentFragment();
+            items.forEach(item => {
+                const card = createContentCard(item);
+                if (card) {
+                    fragment.appendChild(card);
+                }
+            });
+
+            if (currentView === 'grid') {
+                elements.contentGrid.appendChild(fragment);
+            } else {
+                elements.contentList.appendChild(fragment);
+            }
+            setupLazyLoading();
         }
 
         async function applyUpdatedDataToUI() {
@@ -8363,6 +8423,14 @@ async function switchToServer(server, allServers) {
                 });
             }
 
+            // Load More button
+            const loadMoreBtn = document.getElementById('load-more-btn');
+            if (loadMoreBtn) {
+                loadMoreBtn.addEventListener('click', () => {
+                    fetchAllContentFromServer(currentPage + 1, true);
+                });
+            }
+
             // Theme toggle
             elements.themeToggle.addEventListener('click', toggleTheme);
 
@@ -8755,6 +8823,120 @@ async function switchToServer(server, allServers) {
             });
         }
 
+        function appendContentToGrid(entries) {
+            entries.forEach(item => {
+                const card = createContentCard(item);
+                if (card) elements.contentGrid.appendChild(card);
+                const listItem = createContentListItem(item);
+                if (listItem) elements.contentList.appendChild(listItem);
+            });
+            setupLazyLoading();
+        }
+
+        async function init() {
+            try {
+                const db = await dbUtil.open();
+                const cachedData = await dbUtil.get(db, PLAYLIST_KEY);
+                db.close();
+
+                if (cachedData && cachedData.Categories && cachedData.Categories.length > 0) {
+                    console.log("Loading content from cache.");
+                    cineData = cachedData;
+
+                    processAndDisplayContent(cachedData);
+
+                    if (cachedData.pagination) {
+                        currentPage = cachedData.pagination.currentPage;
+                        totalPages = cachedData.pagination.totalPages;
+                        if (currentPage < totalPages) {
+                            elements.loadMoreContainer.style.display = 'block';
+                        } else {
+                            elements.loadMoreContainer.style.display = 'none';
+                        }
+                    }
+                } else {
+                    console.log("Cache is empty. Fetching from server.");
+                    await fetchAllContentFromServer(1);
+                }
+            } catch (error) {
+                console.error("Initialization failed:", error);
+                await fetchAllContentFromServer(1);
+            }
+        }
+
+        async function fetchAllContentFromServer(page = 1, isLoadMore = false) {
+            if (isFetching) return;
+            isFetching = true;
+            elements.loadingSpinner.style.display = 'block';
+
+            try {
+                const response = await fetch(`api.php?action=get_all_content&page=${page}&limit=${CONTENT_PER_PAGE}`);
+                if (!response.ok) {
+                    throw new Error(`Network response was not ok: ${response.statusText}`);
+                }
+                const data = await response.json();
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                const newEntries = [];
+                if (data.Categories) {
+                    data.Categories.forEach(category => {
+                        const type = category.MainCategory.toLowerCase().includes('movie') ? 'movie' :
+                                     category.MainCategory.toLowerCase().includes('series') ? 'series' : 'live';
+                        if(category.Entries) {
+                            category.Entries.forEach(entry => {
+                                newEntries.push({ ...entry, type });
+                            });
+                        }
+                    });
+                }
+
+                if (!isLoadMore) {
+                    cineData = data;
+                    processAndDisplayContent(data);
+                } else {
+                    if (data.Categories) {
+                        data.Categories.forEach(newCategory => {
+                            const existingCategory = cineData.Categories.find(c => c.MainCategory === newCategory.MainCategory);
+                            if (existingCategory) {
+                                if(newCategory.Entries) {
+                                    existingCategory.Entries.push(...newCategory.Entries);
+                                }
+                            } else {
+                                cineData.Categories.push(newCategory);
+                            }
+                        });
+                    }
+                    cineData.pagination = data.pagination;
+
+                    cachedContent.push(...newEntries);
+                    appendContentToGrid(newEntries);
+                }
+
+                currentPage = data.pagination.currentPage;
+                totalPages = data.pagination.totalPages;
+
+                if (currentPage < totalPages) {
+                    elements.loadMoreContainer.style.display = 'block';
+                } else {
+                    elements.loadMoreContainer.style.display = 'none';
+                }
+
+                const db = await dbUtil.open();
+                await dbUtil.set(db, PLAYLIST_KEY, cineData);
+                db.close();
+                console.log(`Page ${page} loaded and cached.`);
+
+            } catch (error) {
+                console.error('Failed to fetch content:', error);
+                elements.contentGrid.innerHTML = '<p>Error loading content. Please try again later.</p>';
+            } finally {
+                isFetching = false;
+                elements.loadingSpinner.style.display = 'none';
+            }
+        }
         // --- Parental Control Logic ---
 
         const ALL_RATINGS = {

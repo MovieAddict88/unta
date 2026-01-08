@@ -25,16 +25,35 @@ function getAllContent() {
     }
 
     try {
+        $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+        $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 20;
+        $offset = ($page - 1) * $limit;
+
+        // Get total count of items
+        $totalStmt = $pdo->query("SELECT COUNT(*) FROM content");
+        $totalItems = $totalStmt->fetchColumn();
+        $totalPages = ceil($totalItems / $limit);
+
         // The final structure we want to build
         $output = [
-            'Categories' => []
+            'Categories' => [],
+            'pagination' => [
+                'totalItems' => (int)$totalItems,
+                'totalPages' => (int)$totalPages,
+                'currentPage' => $page,
+                'limit' => $limit
+            ]
         ];
 
         // A map to hold categories while we build them
         $categoriesMap = [];
 
-        // Fetch all content items
-        $contentStmt = $pdo->query("SELECT * FROM content ORDER BY type, title");
+        // Fetch paginated content items
+        $contentStmt = $pdo->prepare("SELECT * FROM content ORDER BY type, title LIMIT :limit OFFSET :offset");
+        $contentStmt->bindParam(':limit', $limit, PDO::PARAM_INT);
+        $contentStmt->bindParam(':offset', $offset, PDO::PARAM_INT);
+        $contentStmt->execute();
+
         while ($content = $contentStmt->fetch()) {
             $mainCategoryName = '';
             if ($content['type'] === 'movie') {
