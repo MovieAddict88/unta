@@ -1,0 +1,79 @@
+{
+  "name": "ConeCraze",
+  "short_name": "ConeCraze",
+  "description": "Watch movies and TV shows anytime, anywhere. Stream unlimited entertainment on all your devices.",
+  "id": "/",
+  "scope": "/",
+  "start_url": "/index.php",
+  "display": "standalone",
+  "display_override": ["standalone", "fullscreen", "minimal-ui"],
+  "background_color": "#000000",
+  "theme_color": "#141414",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "https://movie-fcs.fwh.is/cinecraze/cinecraze.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://movie-fcs.fwh.is/cinecraze/cinecraze.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://movie-fcs.fwh.is/cinecraze/cinecraze.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://movie-fcs.fwh.is/cinecraze/cinecraze.png",
+      "sizes": "144x144",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://movie-fcs.fwh.is/cinecraze/cinecraze.png",
+      "sizes": "152x152",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://movie-fcs.fwh.is/cinecraze/cinecraze.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://movie-fcs.fwh.is/cinecraze/cinecraze.png",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://movie-fcs.fwh.is/cinecraze/cinecraze.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["entertainment", "video"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Browse All",
+      "short_name": "Browse",
+      "description": "Browse all content",
+      "url": "/index.php",
+      "icons": [
+        {
+          "src": "https://movie-fcs.fwh.is/cinecraze/cinecraze.png",
+          "sizes": "96x96"
+        }
+      ]
+    }
+  ]
+}
