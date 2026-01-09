@@ -3966,7 +3966,7 @@
 
         // --- IndexedDB Caching ---
         const DB_NAME = 'ConeCrazeDB';
-        const DB_VERSION = 2;
+        const DB_VERSION = 3;
         const STORE_NAME = 'playlistStore';
         const WATCH_LATER_STORE_NAME = 'watchLaterStore';
         const PLAYLIST_KEY = 'mainPlaylist';
@@ -4050,6 +4050,76 @@
                     request.onerror = event => {
                         console.error('Error clearing DB store:', event.target.errorCode);
                         reject('Error clearing DB store: ' + event.target.errorCode);
+                    };
+                });
+            },
+            delete: function(db, key) {
+                return new Promise((resolve, reject) => {
+                    if (!db) {
+                        reject("Database connection is not available.");
+                        return;
+                    }
+                    const transaction = db.transaction([WATCH_LATER_STORE_NAME], 'readwrite');
+                    const store = transaction.objectStore(WATCH_LATER_STORE_NAME);
+                    const request = store.delete(key);
+                    request.onsuccess = () => {
+                        resolve();
+                    };
+                    request.onerror = event => {
+                        reject(event.target.error);
+                    };
+                });
+            },
+            getAll: function(db) {
+                return new Promise((resolve, reject) => {
+                    if (!db) {
+                        reject("Database connection is not available.");
+                        return;
+                    }
+                    const transaction = db.transaction([WATCH_LATER_STORE_NAME], 'readonly');
+                    const store = transaction.objectStore(WATCH_LATER_STORE_NAME);
+                    const request = store.getAll();
+                    request.onsuccess = event => {
+                        resolve(event.target.result);
+                    };
+                    request.onerror = event => {
+                        console.error('Error getting all data from DB:', event.target.errorCode);
+                        reject('Error getting all data from DB: ' + event.target.errorCode);
+                    };
+                });
+            },
+            setWatchLater: function(db, value) {
+                return new Promise((resolve, reject) => {
+                    if (!db) {
+                        reject("Database connection is not available.");
+                        return;
+                    }
+                    const transaction = db.transaction([WATCH_LATER_STORE_NAME], 'readwrite');
+                    const store = transaction.objectStore(WATCH_LATER_STORE_NAME);
+                    const request = store.put(value);
+                    request.onsuccess = () => {
+                        resolve();
+                    };
+                    request.onerror = event => {
+                        reject(event.target.error);
+                    };
+                });
+            },
+            getWatchLater: function(db, key) {
+                return new Promise((resolve, reject) => {
+                    if (!db) {
+                        reject("Database connection is not available.");
+                        return;
+                    }
+                    const transaction = db.transaction([WATCH_LATER_STORE_NAME], 'readonly');
+                    const store = transaction.objectStore(WATCH_LATER_STORE_NAME);
+                    const request = store.get(key);
+                    request.onsuccess = event => {
+                        resolve(event.target.result);
+                    };
+                    request.onerror = event => {
+                        console.error('Error getting watch later data from DB:', event.target.errorCode);
+                        reject('Error getting watch later data from DB: ' + event.target.errorCode);
                     };
                 });
             }
@@ -9398,18 +9468,18 @@ async function switchToServer(server, allServers) {
         async function toggleWatchLater(content, buttonElement) {
             if (!content || !content.Title) return;
             const contentId = content.Title;
-            const db = await watchLaterDbUtil.open();
-            const existing = await watchLaterDbUtil.get(db, contentId);
+            const db = await dbUtil.open();
+            const existing = await dbUtil.getWatchLater(db, contentId);
 
             if (existing) {
-                await watchLaterDbUtil.delete(db, contentId);
+                await dbUtil.delete(db, contentId);
                 alert(`"${content.Title}" removed from Watch Later.`);
                 watchLaterItemsSet.delete(contentId);
                 if (buttonElement) buttonElement.classList.remove('active');
             } else {
                 // Ensure the object we store has an 'id' property for the keyPath
                 const itemToStore = { ...content, id: contentId };
-                await watchLaterDbUtil.set(db, itemToStore);
+                await dbUtil.setWatchLater(db, itemToStore);
                 alert(`"${content.Title}" added to Watch Later.`);
                 watchLaterItemsSet.add(contentId);
                 if (buttonElement) buttonElement.classList.add('active');
@@ -9422,8 +9492,8 @@ async function switchToServer(server, allServers) {
             const watchLaterBtn = document.getElementById('watch-later-btn');
             if (!watchLaterBtn) return;
 
-            const db = await watchLaterDbUtil.open();
-            const existing = await watchLaterDbUtil.get(db, contentId);
+            const db = await dbUtil.open();
+            const existing = await dbUtil.getWatchLater(db, contentId);
             db.close();
 
             if (existing) {
@@ -9435,8 +9505,8 @@ async function switchToServer(server, allServers) {
 
         async function deleteFromWatchLater(contentId) {
             if (!contentId) return;
-            const db = await watchLaterDbUtil.open();
-            await watchLaterDbUtil.delete(db, contentId);
+            const db = await dbUtil.open();
+            await dbUtil.delete(db, contentId);
             db.close();
             console.log('Removed from Watch Later:', contentId);
             watchLaterItemsSet.delete(contentId); // Sync the cache
